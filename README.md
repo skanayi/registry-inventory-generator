@@ -2,7 +2,7 @@
 A tool to generate report on docker registry usage (images, tags, size,date of upload etc)
 Usage:
 - setup below environment variables
- - REGISTRY (ex:https://registry.docker.com)
+ - REGISTRY (ex:registry.docker.com ,do not prefix https:// to the evironment variable)
  - REGISTRY_USERNAME
  - REGISTRY_PASSWORD
 - run ./registry-inventory-generator
