@@ -53,8 +53,6 @@ func main() {
 
 	for _, s := range r.Repositories {
 		allTags := exporter.getTags(RegistryURL, s)
-		fmt.Println("all tags are ", allTags)
-
 		for _, tag := range allTags {
 			timeOfCreation, err := exporter.getDateOfCreation(RegistryURL, s, tag)
 
@@ -170,16 +168,14 @@ func (exporter Exporter) getRegistryImages(registryUrl string) Repositories {
 	}
 	defer response.Body.Close()
 	fmt.Println("getting registry images")
-
-	//fmt.Println(response.Body)
 	body, err := ioutil.ReadAll(response.Body)
 	if err != nil {
 		exporter.Logger.Err(err).Msg("error calling rest aned point")
 	}
-	//fmt.Println(string(body))
+
 	var dt Repositories
 	json.Unmarshal(body, &dt)
-	//fmt.Println("dt is", dt)
+
 
 	return dt
 
@@ -192,8 +188,7 @@ type Tags struct {
 func (exporter Exporter) getTags(registryUrl, repository string) []string {
 
 	apiUrl := "https://" + registryUrl + "/v2/" + repository + "/tags/list"
-
-	parsedAPIUrl, _ := url.Parse(apiUrl)
+        parsedAPIUrl, _ := url.Parse(apiUrl)
 	exporter.Request.URL = parsedAPIUrl
 	exporter.Request.Method = "GET"
 
@@ -204,17 +199,13 @@ func (exporter Exporter) getTags(registryUrl, repository string) []string {
 	}
 	defer response.Body.Close()
 	fmt.Println("getting tags for ", repository)
-
-	//fmt.Println(response.Body)
 	body, err := ioutil.ReadAll(response.Body)
 	if err != nil {
 		exporter.Logger.Err(err).Msg("error calling rest aned point")
 	}
-	//fmt.Println(string(body))
 
 	var dt Tags
 	json.Unmarshal(body, &dt)
-	//fmt.Println("dt is", dt)
 	return dt.Tags
 
 }
@@ -247,31 +238,24 @@ func (exporter Exporter) getDateOfCreation(registryUrl, repository, tag string) 
 	}
 	defer response.Body.Close()
 	fmt.Printf("getting date of creation for %s %s \n", repository, tag)
-
-	//fmt.Println(response.Body)
 	body, err := ioutil.ReadAll(response.Body)
 	if err != nil {
 		exporter.Logger.Err(err).Msg("error calling rest aned point")
 	}
-	//fmt.Println(string(body))
 
 	var dt Manifest
 	json.Unmarshal(body, &dt)
 	if len(dt.History) > 0 {
 		x := (dt.History)[0]
 		var m ManifestCreatedDate
-		//fmt.Println(x.V1Compatibility)
 		json.Unmarshal([]byte(x.V1Compatibility), &m)
-		//fmt.Println(m.Created)
 		t, _ := time.Parse(time.RFC3339, m.Created)
-		fmt.Println("date of tag creation is", t)
 		return t, nil
 	} else {
 
 		return time.Now(), fmt.Errorf("no tags found")
 	}
 
-	//fmt.Println("dt is", dt)
 
 }
 
