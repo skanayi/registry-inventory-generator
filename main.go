@@ -2,193 +2,284 @@ package main
 
 import (
 	"context"
-	"encoding/pem"
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"net/http"
+	"net/url"
 	"os"
+	"path"
 	"strings"
+	"time"
 
-	"text/template"
-
-	triton "github.com/joyent/triton-go"
-	"github.com/joyent/triton-go/authentication"
-	"github.com/joyent/triton-go/compute"
+	"github.com/containers/image/docker"
+	"github.com/containers/image/types"
 	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 )
 
-var logger zerolog.Logger
+var (
+	RegistryURL, RegistryUserName, RegistryPassword string
+)
 
 func init() {
-
-	logger = zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr}).With().Timestamp().Logger()
+	RegistryURL = os.Getenv("REGISTRY")
+	RegistryUserName = os.Getenv("REGISTRY_USERNAME")
+	RegistryPassword = os.Getenv("REGISTRY_PASSWORD")
 
 }
 
-type InventoryHost struct {
-	HostName   string
-	IP         string
-	Tags       string
-	Datacenter string
-	UUID       string
-	Image      string
-	Package    string
-	State      string
-	Brand      string
+type Exporter struct {
+	Logger  zerolog.Logger
+	Client  *http.Client
+	Request *http.Request
 }
 
-var InventoryHosts []InventoryHost
-
-type SDCOnfigs struct {
-	Inventory []InventoryHost
+type Image struct {
+	ImageWithTag   string
+	TimeOfCreation time.Time
+	Size           int
 }
 
 func main() {
 
+	exporter := NewExporter()
+	exporter.Logger.Info().Interface("starting", time.Now())
 	ctx := context.Background()
 
-	inventoryDcs := strings.Split(strings.ToLower(os.Getenv("TRITON_INVENTORY_DCS")), ",")
-	for _, dcs := range inventoryDcs {
-		
-		cs, err := NewTritonClient(dcs)
-		if err != nil {
-			logger.Debug().Msg("error occured")
+	r := exporter.getRegistryImages(RegistryURL)
+
+	var Images []Image
+
+	for _, s := range r.Repositories {
+		allTags := exporter.getTags(RegistryURL, s)
+		fmt.Println("all tags are ", allTags)
+
+		for _, tag := range allTags {
+			timeOfCreation, err := exporter.getDateOfCreation(RegistryURL, s, tag)
+
+			if err != nil {
+				exporter.Logger.Err(err).Msg("error getting tags")
+			}
+			var pp Image
+			pp.ImageWithTag = RegistryURL + "/" + s + ":" + tag
+			pp.TimeOfCreation = timeOfCreation
+			pp.Size = exporter.getSize(ctx, pp.ImageWithTag)
+			Images = append(Images, pp)
 
 		}
-		generate(cs, c, ctx)
 
 	}
 
-	var sdConfigs SDCOnfigs
-	sdConfigs.Inventory = InventoryHosts
-
-	templateFile := "ansible.tmpl"
-	targetFilePath := "ansible.inventory"
-	baseFileName := "ansible.tmpl"
-	GenerateConfigFileFromTemplate(templateFile, targetFilePath, baseFileName, sdConfigs)
+	cwd, _ := os.Getwd()
+	SaveJsonFile(Images, path.Join(cwd, RegistryURL+"_reports.json"))
+	exporter.Logger.Info().Interface("ending", time.Now())
 
 }
 
-func generate(c *compute.ComputeClient, dc string, ctx context.Context) {
-
-	mapTags := make(map[string]interface{})
-	if os.Getenv("TRITON_IVENTORY_TAGS") != "" {
-		splitTags := strings.Split(os.Getenv("TRITON_IVENTORY_TAGS"), "=")
-
-		mapTags[splitTags[0]] = splitTags[1]
-	}
-
-	ci := c.Instances()
-
-	li := &compute.ListInstancesInput{Tags: mapTags}
-	instances, err := ci.List(ctx, li)
+func SaveJsonFile(v interface{}, path string) {
+	fo, err := os.Create(path)
 	if err != nil {
-		logger.Err(err).Msg("error listing")
+		panic(err)
 	}
-
-	for _, instance := range instances {
-
-		var i InventoryHost
-		i.HostName = instance.Name
-		i.IP = instance.PrimaryIP
-		i.Datacenter = dc
-		var tagString string
-		for key, value := range instance.Tags {
-			strKey := fmt.Sprintf("%v", key)
-			strValue := fmt.Sprintf("%v", value)
-			tagString = tagString + strKey + "=" + strValue + " "
-
-		}
-		i.Tags = tagString
-		i.UUID = instance.ID
-
-		i.Package = instance.Package
-		i.State = instance.State
-		i.Brand = instance.Brand
-		i.Image = instance.Image
-
-		InventoryHosts = append(InventoryHosts, i)
+	defer fo.Close()
+	e := json.NewEncoder(fo)
+	if err := e.Encode(v); err != nil {
+		panic(err)
 	}
 }
 
-func NewTritonClient(SDC_URL string) (*compute.ComputeClient, error) {
+func NewExporter() *Exporter {
 
-	keyMaterial := os.Getenv("TRITON_KEY_MATERIAL")
-	keyID := os.Getenv("TRITON_SSH_KEY_ID")
-	accountName := os.Getenv("TRITON_ACCOUNT")
-	userName := ""
-	var signer authentication.Signer
-	var err error
+	fs, _ := os.Create("/var/log/exporter.log")
+	log.Logger = log.With().Caller().Logger().Output(fs)
+	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
+	log.Info().Msg("starting exporter")
 
-	var keyBytes []byte
-	if _, err = os.Stat(keyMaterial); err == nil {
-		keyBytes, err = ioutil.ReadFile(keyMaterial)
-		if err != nil {
-			logger.Fatal().Err(err).Msg("Error reading key material")
+	req, _ := http.NewRequest("GET", "", nil)
+	req.SetBasicAuth(RegistryUserName, RegistryPassword)
+	client := &http.Client{
+		Timeout: time.Second * 10,
+	}
 
-		}
-		block, _ := pem.Decode(keyBytes)
-		if block == nil {
-			logger.Fatal().Err(err).Msg("No key found")
-		}
+	return &Exporter{Logger: log.Logger, Request: req, Client: client}
 
-		if block.Headers["Proc-Type"] == "4,ENCRYPTED" {
-			logger.Fatal().Err(err).Msg("password protected keys are\n" +
-				"not currently supported. Please decrypt the key prior to use")
-		}
+}
 
+func (exporter *Exporter) getSize(ctx context.Context, imageWithTag string) int {
+
+	err := docker.CheckAuth(ctx, &types.SystemContext{}, RegistryUserName, RegistryPassword, strings.Split(imageWithTag, "/")[0])
+	if err != nil {
+		exporter.Logger.Err(err).Msg("error authenticating to docker registry")
+		return -1
+	}
+
+	ref, err := docker.ParseReference("//" + imageWithTag)
+	if err != nil {
+
+		exporter.Logger.Err(err).Msgf("error parsing docker image %s", imageWithTag)
+		return -1
+
+	}
+
+	img, err := ref.NewImage(ctx, nil)
+	if err != nil {
+		exporter.Logger.Err(err).Msgf("error referring the image %s", imageWithTag)
+		return -1
+	}
+	defer img.Close()
+
+	b, _, err := img.Manifest(ctx)
+	if err != nil {
+		exporter.Logger.Err(err).Msgf("error getting mnifest for the image %s", imageWithTag)
+		return -1
+	}
+
+	var m ManifestConfig
+	err = json.Unmarshal(b, &m)
+	if err != nil {
+		exporter.Logger.Err(err).Msg("error unmashalling the manifest json")
+
+	}
+
+	result := m.Config.Size
+	for _, x := range m.Layers {
+
+		result = result + x.Size
+
+	}
+
+	return result
+
+}
+
+type Repositories struct {
+	Repositories []string `json:"repositories"`
+}
+
+func (exporter Exporter) getRegistryImages(registryUrl string) Repositories {
+	apiUrl := "https://" + registryUrl + "/v2/_catalog"
+	parsedAPIUrl, _ := url.Parse(apiUrl)
+	exporter.Request.URL = parsedAPIUrl
+	exporter.Request.Method = "GET"
+
+	response, err := exporter.Client.Do(exporter.Request)
+
+	if err != nil {
+		exporter.Logger.Err(err).Msg("error calling rest aned point")
+	}
+	defer response.Body.Close()
+	fmt.Println("getting registry images")
+
+	//fmt.Println(response.Body)
+	body, err := ioutil.ReadAll(response.Body)
+	if err != nil {
+		exporter.Logger.Err(err).Msg("error calling rest aned point")
+	}
+	//fmt.Println(string(body))
+	var dt Repositories
+	json.Unmarshal(body, &dt)
+	//fmt.Println("dt is", dt)
+
+	return dt
+
+}
+
+type Tags struct {
+	Tags []string `json:"tags"`
+}
+
+func (exporter Exporter) getTags(registryUrl, repository string) []string {
+
+	apiUrl := "https://" + registryUrl + "/v2/" + repository + "/tags/list"
+
+	parsedAPIUrl, _ := url.Parse(apiUrl)
+	exporter.Request.URL = parsedAPIUrl
+	exporter.Request.Method = "GET"
+
+	response, err := exporter.Client.Do(exporter.Request)
+
+	if err != nil {
+		exporter.Logger.Err(err).Msg("error calling rest aned point")
+	}
+	defer response.Body.Close()
+	fmt.Println("getting tags for ", repository)
+
+	//fmt.Println(response.Body)
+	body, err := ioutil.ReadAll(response.Body)
+	if err != nil {
+		exporter.Logger.Err(err).Msg("error calling rest aned point")
+	}
+	//fmt.Println(string(body))
+
+	var dt Tags
+	json.Unmarshal(body, &dt)
+	//fmt.Println("dt is", dt)
+	return dt.Tags
+
+}
+
+type Manifest struct {
+	FsLayers []struct {
+		BlobSum string `json:"blobSum"`
+	} `json:"fsLayers"`
+	History []struct {
+		V1Compatibility string `json:"v1Compatibility"`
+	} `json:"history"`
+}
+
+type ManifestCreatedDate struct {
+	Created string `json:"created"`
+}
+
+func (exporter Exporter) getDateOfCreation(registryUrl, repository, tag string) (time.Time, error) {
+
+	apiUrl := "https://" + registryUrl + "/v2/" + repository + "/manifests/" + tag
+
+	parsedAPIUrl, _ := url.Parse(apiUrl)
+	exporter.Request.URL = parsedAPIUrl
+	exporter.Request.Method = "GET"
+
+	response, err := exporter.Client.Do(exporter.Request)
+
+	if err != nil {
+		exporter.Logger.Err(err).Msg("error calling rest aned point")
+	}
+	defer response.Body.Close()
+	fmt.Printf("getting date of creation for %s %s \n", repository, tag)
+
+	//fmt.Println(response.Body)
+	body, err := ioutil.ReadAll(response.Body)
+	if err != nil {
+		exporter.Logger.Err(err).Msg("error calling rest aned point")
+	}
+	//fmt.Println(string(body))
+
+	var dt Manifest
+	json.Unmarshal(body, &dt)
+	if len(dt.History) > 0 {
+		x := (dt.History)[0]
+		var m ManifestCreatedDate
+		//fmt.Println(x.V1Compatibility)
+		json.Unmarshal([]byte(x.V1Compatibility), &m)
+		//fmt.Println(m.Created)
+		t, _ := time.Parse(time.RFC3339, m.Created)
+		fmt.Println("date of tag creation is", t)
+		return t, nil
 	} else {
-		keyBytes = []byte(keyMaterial)
+
+		return time.Now(), fmt.Errorf("no tags found")
 	}
 
-	input := authentication.PrivateKeySignerInput{
-		KeyID:              keyID,
-		PrivateKeyMaterial: keyBytes,
-		AccountName:        accountName,
-		Username:           userName,
-	}
+	//fmt.Println("dt is", dt)
 
-	signer, err = authentication.NewPrivateKeySigner(input)
-	if err != nil {
-		logger.Fatal().Err(err).Msg("Error Creating SSH Private Key Signer")
-
-	}
-
-	config := &triton.ClientConfig{
-		TritonURL:   SDC_URL,
-		AccountName: accountName,
-		Username:    userName,
-		Signers:     []authentication.Signer{signer},
-	}
-
-	c, err := compute.NewClient(config)
-	if err != nil {
-		logger.Fatal().Err(err).Msg("Compute new client")
-
-	}
-	return c, err
 }
 
-func GenerateConfigFileFromTemplate(templateFile string, targetFilePath string, baseFileName string, sdConfigs interface{}) error {
-
-	t := template.Must(template.New(baseFileName).ParseFiles(templateFile))
-	f, ferr := os.Create(targetFilePath)
-
-	if ferr != nil {
-
-		logger.Info().Err(ferr).Msgf("failed creating  target file")
-		return ferr
-
-	}
-
-	defer f.Close()
-	err := t.Execute(f, sdConfigs)
-	if err != nil {
-		logger.Info().Err(err).Msgf("failed apply template: ontinuing with out copying")
-		return err
-	}
-
-	logger.Info().Msgf("completed generation of  config file for file")
-	//locker.Unlock()
-	return nil
-
+type ManifestConfig struct {
+	Config struct {
+		Size int `json:"size"`
+	} `json:"config"`
+	Layers []struct {
+		Size int `json:"size"`
+	} `json:"layers"`
 }
