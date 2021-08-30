@@ -91,7 +91,7 @@ func SaveJsonFile(v interface{}, path string) {
 
 func NewExporter() *Exporter {
 
-	fs, _ := os.Create("/var/log/exporter.log")
+	fs, _ := os.Create("/var/logs/registry_reports.log")
 	log.Logger = log.With().Caller().Logger().Output(fs)
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
 	log.Info().Msg("starting exporter")
