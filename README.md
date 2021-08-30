@@ -1,11 +1,11 @@
 # registry-inventory-generator
 A tool to generate report on docker registry usage (images, tags, size,date of upload etc)
 # Usage:
-- setup below environment variables
+- Setup below environment variables
  - REGISTRY (ex:registry.docker.com ,do not prefix https:// to the evironment variable)
  - REGISTRY_USERNAME
  - REGISTRY_PASSWORD
- - run ./registry-inventory-generator
+ - Run ./registry-inventory-generator
    (Be patient ,it will take time to go through each and every image/tags and pull the details) 
 - Output:
    Output file will be created with below format
