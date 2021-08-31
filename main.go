@@ -23,11 +23,12 @@ var (
 )
 
 func init() {
-
-	if strings.HasPrefix(RegistryPassword, "https://") {
+	registryURLPrefix := (strings.Split(os.Getenv("REGISTRY_HOST"), "://"))[0]
+	registryURLSuffix := (strings.Split(os.Getenv("REGISTRY_HOST"), "://"))[1]
+	if registryURLPrefix == "https" {
 		RegistryURL = os.Getenv("REGISTRY_HOST")
 	} else {
-		RegistryURL = "https://" + os.Getenv("REGISTRY_HOST")
+		RegistryURL = registryURLSuffix
 	}
 	RegistryUserName = os.Getenv("REGISTRY_USERNAME")
 	RegistryPassword = os.Getenv("REGISTRY_PASSWORD")
@@ -83,7 +84,7 @@ func SaveJsonFile(v interface{}, path string) {
 }
 
 func NewExporter() *Exporter {
-	fs, _ := os.Create("/var/logs/registry_reports.log")
+	fs, _ := os.Create("registry_reports.log")
 	log.Logger = log.With().Caller().Logger().Output(fs)
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
 	log.Info().Msg("starting exporter")
