@@ -176,7 +176,6 @@ func (exporter Exporter) getRegistryImages(registryUrl string) Repositories {
 	var dt Repositories
 	json.Unmarshal(body, &dt)
 
-
 	return dt
 
 }
@@ -188,7 +187,7 @@ type Tags struct {
 func (exporter Exporter) getTags(registryUrl, repository string) []string {
 
 	apiUrl := "https://" + registryUrl + "/v2/" + repository + "/tags/list"
-        parsedAPIUrl, _ := url.Parse(apiUrl)
+	parsedAPIUrl, _ := url.Parse(apiUrl)
 	exporter.Request.URL = parsedAPIUrl
 	exporter.Request.Method = "GET"
 
@@ -255,7 +254,6 @@ func (exporter Exporter) getDateOfCreation(registryUrl, repository, tag string) 
 
 		return time.Now(), fmt.Errorf("no tags found")
 	}
-
 
 }
 
