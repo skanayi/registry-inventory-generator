@@ -60,14 +60,14 @@ func main() {
 				exporter.Logger.Err(err).Msg("error getting tags")
 			}
 			var i Image
-			i.ImageNameWithTag = RegistryURL + "/" + s + ":" + tag
+			i.ImageNameWithTag = strings.ReplaceAll(RegistryURL, "https://", "") + "/" + s + ":" + tag
 			i.TimeOfCreation = timeOfCreation
 			i.Size = exporter.getSize(ctx, i.ImageNameWithTag)
 			Images = append(Images, i)
 		}
 	}
 	cwd, _ := os.Getwd()
-	SaveJsonFile(Images, path.Join(cwd, strings.ReplaceAll(RegistryURL, "https://", " ")+"_reports.json"))
+	SaveJsonFile(Images, path.Join(cwd, strings.ReplaceAll(RegistryURL, "https://", "")+"_reports.json"))
 	exporter.Logger.Info().Interface("ending exporting", time.Now())
 }
 
@@ -97,6 +97,7 @@ func NewExporter() *Exporter {
 }
 
 func (exporter *Exporter) getSize(ctx context.Context, ImageNameWithTag string) int {
+
 	err := docker.CheckAuth(ctx, &types.SystemContext{}, RegistryUserName, RegistryPassword, strings.Split(ImageNameWithTag, "/")[0])
 	if err != nil {
 		exporter.Logger.Err(err).Msg("error authenticating to docker registry")
