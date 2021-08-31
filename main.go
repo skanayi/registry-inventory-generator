@@ -23,7 +23,12 @@ var (
 )
 
 func init() {
-	RegistryURL = os.Getenv("REGISTRY")
+
+	if strings.HasPrefix(RegistryPassword, "https://") {
+		RegistryURL = os.Getenv("REGISTRY_HOST")
+	} else {
+		RegistryURL = "https://" + os.Getenv("REGISTRY_HOST")
+	}
 	RegistryUserName = os.Getenv("REGISTRY_USERNAME")
 	RegistryPassword = os.Getenv("REGISTRY_PASSWORD")
 }
@@ -35,9 +40,9 @@ type Exporter struct {
 }
 
 type Image struct {
-	ImageWithTag   string
-	TimeOfCreation time.Time
-	Size           int
+	ImageNameWithTag string
+	TimeOfCreation   time.Time
+	Size             int
 }
 
 func main() {
@@ -53,25 +58,25 @@ func main() {
 			if err != nil {
 				exporter.Logger.Err(err).Msg("error getting tags")
 			}
-			var pp Image
-			pp.ImageWithTag = RegistryURL + "/" + s + ":" + tag
-			pp.TimeOfCreation = timeOfCreation
-			pp.Size = exporter.getSize(ctx, pp.ImageWithTag)
-			Images = append(Images, pp)
+			var i Image
+			i.ImageNameWithTag = RegistryURL + "/" + s + ":" + tag
+			i.TimeOfCreation = timeOfCreation
+			i.Size = exporter.getSize(ctx, i.ImageNameWithTag)
+			Images = append(Images, i)
 		}
 	}
 	cwd, _ := os.Getwd()
-	SaveJsonFile(Images, path.Join(cwd, RegistryURL+"_reports.json"))
-	exporter.Logger.Info().Interface("ending", time.Now())
+	SaveJsonFile(Images, path.Join(cwd, strings.ReplaceAll(RegistryURL, "https://", " ")+"_reports.json"))
+	exporter.Logger.Info().Interface("ending exporting", time.Now())
 }
 
 func SaveJsonFile(v interface{}, path string) {
-	fo, err := os.Create(path)
+	f, err := os.Create(path)
 	if err != nil {
 		panic(err)
 	}
-	defer fo.Close()
-	e := json.NewEncoder(fo)
+	defer f.Close()
+	e := json.NewEncoder(f)
 	if err := e.Encode(v); err != nil {
 		panic(err)
 	}
@@ -90,28 +95,28 @@ func NewExporter() *Exporter {
 	return &Exporter{Logger: log.Logger, Request: req, Client: client}
 }
 
-func (exporter *Exporter) getSize(ctx context.Context, imageWithTag string) int {
-	err := docker.CheckAuth(ctx, &types.SystemContext{}, RegistryUserName, RegistryPassword, strings.Split(imageWithTag, "/")[0])
+func (exporter *Exporter) getSize(ctx context.Context, ImageNameWithTag string) int {
+	err := docker.CheckAuth(ctx, &types.SystemContext{}, RegistryUserName, RegistryPassword, strings.Split(ImageNameWithTag, "/")[0])
 	if err != nil {
 		exporter.Logger.Err(err).Msg("error authenticating to docker registry")
 		return -1
 	}
-	ref, err := docker.ParseReference("//" + imageWithTag)
+	ref, err := docker.ParseReference("//" + ImageNameWithTag)
 	if err != nil {
-		exporter.Logger.Err(err).Msgf("error parsing docker image %s", imageWithTag)
+		exporter.Logger.Err(err).Msgf("error parsing docker image %s", ImageNameWithTag)
 		return -1
 	}
 
 	img, err := ref.NewImage(ctx, nil)
 	if err != nil {
-		exporter.Logger.Err(err).Msgf("error referring the image %s", imageWithTag)
+		exporter.Logger.Err(err).Msgf("error referring the image %s", ImageNameWithTag)
 		return -1
 	}
 	defer img.Close()
 
 	b, _, err := img.Manifest(ctx)
 	if err != nil {
-		exporter.Logger.Err(err).Msgf("error getting mnifest for the image %s", imageWithTag)
+		exporter.Logger.Err(err).Msgf("error getting mnifest for the image %s", ImageNameWithTag)
 		return -1
 	}
 
@@ -136,7 +141,7 @@ type Repositories struct {
 }
 
 func (exporter Exporter) getRegistryImages(registryUrl string) Repositories {
-	apiUrl := "https://" + registryUrl + "/v2/_catalog"
+	apiUrl := registryUrl + "/v2/_catalog"
 	parsedAPIUrl, _ := url.Parse(apiUrl)
 	exporter.Request.URL = parsedAPIUrl
 	exporter.Request.Method = "GET"
@@ -148,12 +153,12 @@ func (exporter Exporter) getRegistryImages(registryUrl string) Repositories {
 	fmt.Println("getting registry images")
 	body, err := ioutil.ReadAll(response.Body)
 	if err != nil {
-		exporter.Logger.Err(err).Msg("error calling rest aned point")
+		exporter.Logger.Err(err).Msg("error calling rest end point")
 	}
 
-	var dt Repositories
-	json.Unmarshal(body, &dt)
-	return dt
+	var repos Repositories
+	json.Unmarshal(body, &repos)
+	return repos
 }
 
 type Tags struct {
@@ -161,7 +166,7 @@ type Tags struct {
 }
 
 func (exporter Exporter) getTags(registryUrl, repository string) []string {
-	apiUrl := "https://" + registryUrl + "/v2/" + repository + "/tags/list"
+	apiUrl := registryUrl + "/v2/" + repository + "/tags/list"
 	parsedAPIUrl, _ := url.Parse(apiUrl)
 	exporter.Request.URL = parsedAPIUrl
 	exporter.Request.Method = "GET"
@@ -175,9 +180,9 @@ func (exporter Exporter) getTags(registryUrl, repository string) []string {
 	if err != nil {
 		exporter.Logger.Err(err).Msg("error calling rest endd point")
 	}
-	var dt Tags
-	json.Unmarshal(body, &dt)
-	return dt.Tags
+	var t Tags
+	json.Unmarshal(body, &t)
+	return t.Tags
 
 }
 
@@ -195,7 +200,7 @@ type ManifestCreatedDate struct {
 }
 
 func (exporter Exporter) getDateOfCreation(registryUrl, repository, tag string) (time.Time, error) {
-	apiUrl := "https://" + registryUrl + "/v2/" + repository + "/manifests/" + tag
+	apiUrl := registryUrl + "/v2/" + repository + "/manifests/" + tag
 	parsedAPIUrl, _ := url.Parse(apiUrl)
 	exporter.Request.URL = parsedAPIUrl
 	exporter.Request.Method = "GET"
@@ -209,13 +214,13 @@ func (exporter Exporter) getDateOfCreation(registryUrl, repository, tag string) 
 	if err != nil {
 		exporter.Logger.Err(err).Msg("error calling rest aned point")
 	}
-	var dt Manifest
-	json.Unmarshal(body, &dt)
-	if len(dt.History) > 0 {
-		x := (dt.History)[0]
-		var m ManifestCreatedDate
-		json.Unmarshal([]byte(x.V1Compatibility), &m)
-		t, _ := time.Parse(time.RFC3339, m.Created)
+	var mf Manifest
+	json.Unmarshal(body, &mf)
+	if len(mf.History) > 0 {
+		layerZero := (mf.History)[0]
+		var mc ManifestCreatedDate
+		json.Unmarshal([]byte(layerZero.V1Compatibility), &mc)
+		t, _ := time.Parse(time.RFC3339, mc.Created)
 		return t, nil
 	} else {
 
