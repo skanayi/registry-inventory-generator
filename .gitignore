@@ -1,0 +1,4 @@
+*.log
+README.md
+registry-inventory-generator
+*.json
